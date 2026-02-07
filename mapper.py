@@ -10,8 +10,6 @@ st.set_page_config(page_title="Field Mapper PRO", layout="wide")
 
 # --- 1. PERSISTENT STORAGE ---
 SAVED_DATA = "permanent_work_log.csv"
-
-# Initialize photo storage if not exists
 if 'all_photos' not in st.session_state:
     st.session_state.all_photos = {}
 if 'selected_id' not in st.session_state:
@@ -40,7 +38,7 @@ if 'df' not in st.session_state:
 
 df = st.session_state.df
 
-# --- 3. SEARCH & DYNAMIC ZOOM ---
+# --- 3. SEARCH BOX ---
 st.sidebar.markdown("## 🔍 Find Site")
 search_query = st.sidebar.text_input("Enter Ticket Number")
 
@@ -51,6 +49,7 @@ if search_query:
         st.session_state.selected_id = str(match.iloc[0]['Ticket'])
         m = folium.Map(location=[match.iloc[0]['lat'], match.iloc[0]['lon']], zoom_start=18)
 else:
+    # Auto-zoom to all pins if nothing searched
     sw, ne = df[['lat', 'lon']].min().values.tolist(), df[['lat', 'lon']].max().values.tolist()
     m.fit_bounds([sw, ne])
 
@@ -61,7 +60,8 @@ for _, row in df.iterrows():
     t_id = str(row['Ticket'])
     is_sel = (t_id == str(st.session_state.selected_id))
     color = "orange" if is_sel else ("green" if row['status'] == 'Completed' else "blue")
-    folium.Marker([row['lat'], row['lon']], popup=f"ID:{t_id}", icon=folium.Icon(color=color, icon="camera")).add_to(m)
+    icon = "star" if is_sel else ("check" if row['status'] == 'Completed' else "camera")
+    folium.Marker([row['lat'], row['lon']], popup=f"ID:{t_id}", icon=folium.Icon(color=color, icon=icon)).add_to(m)
 
 map_data = st_folium(m, width=None, height=450, returned_objects=["last_object_clicked_popup"], key="pro_map")
 
@@ -72,30 +72,33 @@ if map_data and map_data.get("last_object_clicked_popup"):
         st.session_state.selected_id = new_id
         st.rerun()
 
-# --- 5. THE SIDEBAR PHOTO HANDLER ---
+# --- 5. THE SIDEBAR ACTIONS ---
 if st.session_state.selected_id:
     t_id = st.session_state.selected_id
     sel_row = df[df['Ticket'].astype(str) == t_id].iloc[0]
     
     st.sidebar.markdown(f"### 📍 Site: {t_id}")
+    
+    # NAVIGATION
     nav_url = f"https://www.google.com/maps/dir/?api=1&destination={sel_row['lat']},{sel_row['lon']}&travelmode=driving"
-    st.sidebar.link_button("🚗 Start Nav", nav_url)
+    st.sidebar.link_button("🚗 Start Google Maps Nav", nav_url)
     
-    # Check for existing photos
-    if t_id in st.session_state.all_photos:
-        st.sidebar.write(f"✅ {len(st.session_state.all_photos[t_id])} photos uploaded.")
+    # PHOTOS
+    photos = st.sidebar.file_uploader("Upload From Gallery", accept_multiple_files=True, key=f"p_up_{t_id}")
+    if photos:
+        st.session_state.all_photos[t_id] = photos
+        st.sidebar.success(f"Linked {len(photos)} photos")
 
-    # REFINED UPLOADER
-    new_photos = st.sidebar.file_uploader("Upload From Gallery", accept_multiple_files=True, key=f"p_up_{t_id}")
-    
-    # Immediately store them if they exist
-    if new_photos:
-        st.session_state.all_photos[t_id] = new_photos
-
-    if st.sidebar.button("✅ Confirm Completion"):
+    # COMPLETION BUTTON
+    if st.sidebar.button("✅ Confirm Completion", use_container_width=True):
         st.session_state.df.loc[st.session_state.df['Ticket'].astype(str) == t_id, 'status'] = 'Completed'
         st.session_state.selected_id = None
         save_progress()
+        st.rerun()
+
+    # THE "OOPS" BUTTON (Revert to Blue)
+    if st.sidebar.button("🔙 Deselect / Go Back", use_container_width=True):
+        st.session_state.selected_id = None
         st.rerun()
 
 # --- 6. EXPORT ---
