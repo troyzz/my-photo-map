@@ -10,6 +10,8 @@ st.set_page_config(page_title="Field Mapper PRO", layout="wide")
 
 # --- 1. PERSISTENT STORAGE ---
 SAVED_DATA = "permanent_work_log.csv"
+
+# Initialize photo storage if not exists
 if 'all_photos' not in st.session_state:
     st.session_state.all_photos = {}
 if 'selected_id' not in st.session_state:
@@ -38,30 +40,20 @@ if 'df' not in st.session_state:
 
 df = st.session_state.df
 
-# --- 3. SEARCH & DYNAMIC ZOOM LOGIC ---
-st.sidebar.title("🔍 Search")
-search_query = st.sidebar.text_input("Search Ticket #", placeholder="e.g. 10452")
+# --- 3. SEARCH & DYNAMIC ZOOM ---
+st.sidebar.markdown("## 🔍 Find Site")
+search_query = st.sidebar.text_input("Enter Ticket Number")
 
-# Create the map object first
 m = folium.Map()
-
-# Calculate Bounds: If searching, zoom to site. If not, zoom to ALL pins.
 if search_query:
     match = df[df['Ticket'].astype(str).str.contains(search_query, na=False)]
     if not match.empty:
         st.session_state.selected_id = str(match.iloc[0]['Ticket'])
-        # Zoom close to the searched site
-        m.location = [match.iloc[0]['lat'], match.iloc[0]['lon']]
-        m.zoom_start = 18 
-        st.sidebar.success(f"Found Ticket {st.session_state.selected_id}")
+        m = folium.Map(location=[match.iloc[0]['lat'], match.iloc[0]['lon']], zoom_start=18)
 else:
-    # AUTO-ZOOM TO ALL PINS
-    # We find the min/max lat and lon to create a 'box' that contains everyone
-    sw = df[['lat', 'lon']].min().values.tolist() # Southwest corner
-    ne = df[['lat', 'lon']].max().values.tolist() # Northeast corner
-    m.fit_bounds([sw, ne]) 
+    sw, ne = df[['lat', 'lon']].min().values.tolist(), df[['lat', 'lon']].max().values.tolist()
+    m.fit_bounds([sw, ne])
 
-# --- 4. MAP LAYERS & MARKERS ---
 folium.TileLayer(tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                  attr='Esri', name='Satellite', overlay=False).add_to(m)
 
@@ -71,27 +63,36 @@ for _, row in df.iterrows():
     color = "orange" if is_sel else ("green" if row['status'] == 'Completed' else "blue")
     folium.Marker([row['lat'], row['lon']], popup=f"ID:{t_id}", icon=folium.Icon(color=color, icon="camera")).add_to(m)
 
-map_data = st_folium(m, width=None, height=400, returned_objects=["last_object_clicked_popup"], key="pro_map")
+map_data = st_folium(m, width=None, height=450, returned_objects=["last_object_clicked_popup"], key="pro_map")
 
-# --- 5. SIDEBAR ACTIONS ---
+# --- 4. SELECTION LOGIC ---
 if map_data and map_data.get("last_object_clicked_popup"):
     new_id = map_data["last_object_clicked_popup"].split(":")[1]
     if st.session_state.selected_id != new_id:
         st.session_state.selected_id = new_id
         st.rerun()
 
+# --- 5. THE SIDEBAR PHOTO HANDLER ---
 if st.session_state.selected_id:
     t_id = st.session_state.selected_id
     sel_row = df[df['Ticket'].astype(str) == t_id].iloc[0]
-    st.sidebar.header(f"📍 Ticket: {t_id}")
-    nav_url = f"https://www.google.com/maps/dir/?api=1&destination={sel_row['lat']},{sel_row['lon']}&travelmode=driving"
-    st.sidebar.link_button("🚗 Start Google Maps Nav", nav_url)
     
-    photos = st.sidebar.file_uploader("Upload Photos", accept_multiple_files=True, key=f"p_{t_id}")
-    if photos:
-        st.session_state.all_photos[t_id] = photos
+    st.sidebar.markdown(f"### 📍 Site: {t_id}")
+    nav_url = f"https://www.google.com/maps/dir/?api=1&destination={sel_row['lat']},{sel_row['lon']}&travelmode=driving"
+    st.sidebar.link_button("🚗 Start Nav", nav_url)
+    
+    # Check for existing photos
+    if t_id in st.session_state.all_photos:
+        st.sidebar.write(f"✅ {len(st.session_state.all_photos[t_id])} photos uploaded.")
 
-    if st.sidebar.button("✅ Confirm Site Completion"):
+    # REFINED UPLOADER
+    new_photos = st.sidebar.file_uploader("Upload From Gallery", accept_multiple_files=True, key=f"p_up_{t_id}")
+    
+    # Immediately store them if they exist
+    if new_photos:
+        st.session_state.all_photos[t_id] = new_photos
+
+    if st.sidebar.button("✅ Confirm Completion"):
         st.session_state.df.loc[st.session_state.df['Ticket'].astype(str) == t_id, 'status'] = 'Completed'
         st.session_state.selected_id = None
         save_progress()
@@ -103,13 +104,13 @@ total_photos = sum(len(v) for v in st.session_state.all_photos.values())
 if total_photos > 0:
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        for ticket, file_list in st.session_state.all_photos.items():
-            for i, file_obj in enumerate(file_list):
-                ext = file_obj.name.split('.')[-1]
-                z.writestr(f"{ticket}_{i+1}.{ext}", file_obj.getvalue())
+        for ticket, files in st.session_state.all_photos.items():
+            for i, f in enumerate(files):
+                ext = f.name.split('.')[-1]
+                z.writestr(f"{ticket}_{i+1}.{ext}", f.getvalue())
     st.sidebar.download_button("📥 Download ZIP", data=buf.getvalue(), file_name="Field_Photos.zip", use_container_width=True)
 
-if st.sidebar.button("🗑️ Reset Everything"):
+if st.sidebar.button("🗑️ Reset Day"):
     if os.path.exists(SAVED_DATA): os.remove(SAVED_DATA)
     st.session_state.clear()
     st.rerun()
